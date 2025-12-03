@@ -29,7 +29,6 @@ class Canvas(QWidget):
         self.points: list[Point2D] = [] 
         self.drag_index: int | None = None
         self.drag_threshold: int = 10
-        self.draw_polygon: bool = False
         self.mode = "edit"
         self.point_radius: int = 6
 
@@ -39,6 +38,14 @@ class Canvas(QWidget):
 
         self.geometric_center: Point2D | None = None
         self.start_angle: np.ndarray | None = None
+
+        #parametric cuve
+        self.curve_points: list[Point2D] = []
+        # self.L = self.width()
+        # self.H = self.height()
+
+        self.L = 800
+        self.H = 500
 
         self.setMinimumSize(400, 300)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -50,7 +57,7 @@ class Canvas(QWidget):
         pen.setWidth(2)
         painter.setPen(pen)
 
-        if self.draw_polygon and len(self.points) > 1:
+        if self.mode == "transform" and len(self.points) > 1:
             for i in range(len(self.points) - 1):
                 painter.drawLine(
                     QPointF(self.points[i].x, self.points[i].y),
@@ -60,10 +67,50 @@ class Canvas(QWidget):
                 QPointF(self.points[-1].x, self.points[-1].y),
                 QPointF(self.points[0].x, self.points[0].y)
             )
+        elif self.mode == "parametric_curve" and len(self.curve_points) > 1:
+            for i in range(len(self.curve_points) - 1):
+                p1, p2 = self.curve_points[i], self.curve_points[i+1]
+                painter.drawLine(QPointF(p1.x, p1.y),QPointF(p2.x, p2.y))
+
+            axis_pen = QPen(QColor(0, 0, 255))  # Blue
+            axis_pen.setWidth(3)
+            painter.setPen(axis_pen)
+
+            origin = Point2D(0,0)
+            origin = self.apply_tranformations([origin])[0]
+
+            # Draw axes
+            p_x_end = Point2D(self.L, origin.y)
+            p_y_end = Point2D(origin.x, 0)
+            # painter.drawLine(QPointF(origin.x, origin.y), QPointF(p_x_end.x, p_x_end.y))
+            # painter.drawLine(QPointF(origin.x, origin.y), QPointF(p_y_end.x, p_y_end.y))   
+            self.draw_arrow(painter, origin, p_x_end)
+            self.draw_arrow(painter, origin, p_y_end) 
 
         for p in self.points:
             painter.setBrush(QColor(255, 255, 255))
             painter.drawEllipse(QPointF(p.x, p.y), self.point_radius, self.point_radius)
+
+    def draw_arrow(self, painter: QPainter, start: Point2D, end: Point2D, size=10):
+        painter.drawLine(QPointF(start.x, start.y), QPointF(end.x, end.y))
+        
+        dx = end.x - start.x
+        dy = end.y - start.y
+        length = (dx**2 + dy**2)**0.5
+        if length == 0:
+            return
+
+        ux = dx / length
+        uy = dy / length
+
+        perp_x = -uy
+        perp_y = ux
+
+        wing1 = Point2D(end.x - ux*size + perp_x*size/2, end.y - uy*size + perp_y*size/2)
+        wing2 = Point2D(end.x - ux*size - perp_x*size/2, end.y - uy*size - perp_y*size/2)
+
+        painter.drawLine(QPointF(end.x, end.y), QPointF(wing1.x, wing1.y))
+        painter.drawLine(QPointF(end.x, end.y), QPointF(wing2.x, wing2.y))
 
     def mousePressEvent(self, event):
 
@@ -164,13 +211,11 @@ class Canvas(QWidget):
             case Qt.Key_E:
                 self.mode = "edit"
                 print("Mode:", self.mode)
-                self.draw_polygon = False
                 self.update()
                 return
             case Qt.Key_T:
                 self.mode = "transform"
-                
-                self.draw_polygon = True
+
                 self.drag_start = None
                 self.original_points = None
                 self.start_angle = None
@@ -179,6 +224,13 @@ class Canvas(QWidget):
                 self.update()
                 return
             
+            case Qt.Key_C:
+                self.mode = "parametric_curve"
+                self.draw_parametric_curve(-3, 3, 100, self.spiral)
+                print("Mode:", self.mode)
+                self.update()
+                return
+
             case _:
                 super().keyPressEvent(event)
 
@@ -200,6 +252,77 @@ class Canvas(QWidget):
         self.points = [T.apply_to_point(p) for p in self.original_points]
         self.update()
 
+
+    def draw_parametric_curve(self, a: float, b: float, n: int, *args):
+        #S
+        list_points = self.compute_parametric_points(a, b, n, *args)
+        self.curve_points = self.apply_tranformations(list_points)
+        
+
+    def apply_tranformations(self, points: list[Point2D]):
+        #S'
+        points = self.translate_to_first_quadrant(points)
+        #S''
+        points = self.scale_to_fit(points, self.L, self.H)
+        #S'''
+        points = self.center_points(points, self.L, self.H)
+        #S''''
+        points = self.flip_Oy(points, self.H)
+        
+        return points
+
+    def compute_parametric_points(self, a, b, n, *args):
+        points = []
+        for i in range(n+1):
+            u = a + i * (b - a) / n
+            if len(args) == 1:
+                pred_func = args[0]
+                f_u, g_u = pred_func(u)
+                points.append(Point2D(f_u, g_u))
+            elif len(args) == 2:
+                f,g = args[0], args[1]
+                points.append(Point2D(f(u), g(u)))
+            else:
+                raise ValueError("Must pass either 1 or 2 functions")
+        return points
+
+    def translate_to_first_quadrant(self, points):
+        min_x = min(p.x for p in points)
+        min_y = min(p.y for p in points)
+        return [Point2D(p.x - min_x, p.y - min_y) for p in points]
+    
+    def scale_to_fit(self, points, L, H):
+        max_x = max(p.x for p in points)
+        max_y = max(p.y for p in points)
+
+        if max_x == 0: max_x = 1
+        if max_y == 0: max_y = 1
+
+        S = min(H / max_y, L / max_x)
+
+        return [Point2D(p.x * S, p.y * S) for p in points]
+
+    def center_points(self, points, L, H):
+        max_x = max(p.x for p in points)
+        max_y = max(p.y for p in points)
+        dx = (L - max_x) / 2
+        dy = (H - max_y) / 2
+
+        return [Point2D(p.x + dx, p.y + dy) for p in points]
+
+    def flip_Oy(self, points, H):
+        return [Point2D(p.x, H - p.y) for p in points]
+    
+
+    def ellipse(self, u, c=100, d=50):
+        return c * np.cos(u), d * np.sin(u)
+    def spiral(self, u):
+        return u * np.cos(u), u * np.sin(u) 
+    def parabola(self, u): 
+        return u, u-1
+
+
+    
 
 class MainWindow(QMainWindow):
     def __init__(self):
