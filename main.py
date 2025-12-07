@@ -3,6 +3,8 @@ import numpy as np
 
 from Point2D import Point2D
 from transformare2D import Transform2D
+from parametric_curve import ParametricCurve
+from modes import Mode
 
 from PyQt5.QtGui import QPainter, QPixmap, QImage, QPen, QColor, QIcon
 from PyQt5.QtCore import Qt, QPoint, QPointF, QRect, QSize, pyqtSignal
@@ -27,14 +29,14 @@ class Canvas(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # draw poligon
+        # Draw poligon
         self.points: list[Point2D] = [] 
         self.drag_index: int | None = None
         self.drag_threshold: int = 10
-        self.mode = "edit"
+        self.mode: Mode = Mode.EDIT
         self.point_radius: int = 6
 
-        #Transformations
+        # Transformations
         self.T: Transform2D = Transform2D()
         self.drag_start: QPoint | None = None
         self.original_points: list[Point2D] | None = None
@@ -42,18 +44,21 @@ class Canvas(QWidget):
         self.geometric_center: Point2D | None = None
         self.start_angle: np.ndarray | None = None
 
-        #parametric cuve
-        self.curve_points: list[Point2D] = []
-        self.min_x = 0
-        self.min_y = 0
-        self.scale_factor = 1
-        self.dx_center = 0
-        self.dy_center = 0
+        # Parametric cuve
+        self.curve = ParametricCurve()
 
         self.L = self.width()
         self.H = self.height()
-        # Qt info
+        
 
+        # Keyboard functions
+        self.keymap = {
+            Qt.Key_E: self.set_mode_edit,
+            Qt.Key_T: self.set_mode_transform,
+            Qt.Key_C: self.set_mode_parametric,
+        }
+
+        # Qt info
         self.setMinimumSize(500, 400)
         self.setFocusPolicy(Qt.StrongFocus)
 
@@ -64,12 +69,12 @@ class Canvas(QWidget):
         pen.setWidth(2)
         painter.setPen(pen)
 
-        if self.mode not in ["parametric_cuve"]:
+        if self.mode in (Mode.EDIT, Mode.TRANSFORM):
             for p in self.points:
                 painter.setBrush(QColor(255, 255, 255))
                 painter.drawEllipse(QPointF(p.x, p.y), self.point_radius, self.point_radius)
 
-        if self.mode == "transform" and len(self.points) > 1:
+        if self.mode == Mode.TRANSFORM and len(self.points) > 1:
             for i in range(len(self.points) - 1):
                 painter.drawLine(
                     QPointF(self.points[i].x, self.points[i].y),
@@ -79,16 +84,22 @@ class Canvas(QWidget):
                 QPointF(self.points[-1].x, self.points[-1].y),
                 QPointF(self.points[0].x, self.points[0].y)
             )
-        elif self.mode == "parametric_curve" and len(self.curve_points) > 1:
-            for i in range(len(self.curve_points) - 1):
-                p1, p2 = self.curve_points[i], self.curve_points[i+1]
-                painter.drawLine(QPointF(p1.x, p1.y),QPointF(p2.x, p2.y))
+        elif self.mode == Mode.PARAMETRIC and self.curve.points:
+            pen = QPen(QColor(30, 30, 30))
+            pen.setWidth(2)
+            painter.setPen(pen)
 
-            axis_pen = QPen(QColor(0, 0, 255)) 
+            for i in range(len(self.curve.points) - 1):
+                p1 = self.curve.points[i]
+                p2 = self.curve.points[i+1]
+                painter.drawLine(QPointF(p1.x, p1.y), QPointF(p2.x, p2.y))
+
+            #draw axes
+            axis_pen = QPen(QColor(0, 0, 255))
             axis_pen.setWidth(3)
             painter.setPen(axis_pen)
 
-            origin = self.transform_origin()
+            origin = self.curve.transformed_origin(self.L, self.H)
 
             A = Point2D(0, origin.y)
             B = Point2D(self.L, origin.y)
@@ -102,16 +113,15 @@ class Canvas(QWidget):
         self.L = self.width()
         self.H = self.height()
 
-        # Recompute curve with new window size
-        if self.mode == "parametric_curve" and self.curve_points:
-            self.draw_parametric_curve(self.last_a, self.last_b, self.last_n, *self.last_funcs)
+        if self.mode == Mode.PARAMETRIC and self.curve.raw_points:
+            self.curve.transform(self.L, self.H)
 
         self.update()
         return super().resizeEvent(event)
 
     def mousePressEvent(self, event):
 
-        if "edit" == self.mode: 
+        if Mode.EDIT == self.mode: 
             self.original_points = [Point2D(p.x, p.y) for p in self.points]
 
             if event.button() == Qt.LeftButton:
@@ -128,7 +138,7 @@ class Canvas(QWidget):
                 self.points.append(Point2D(pos.x(), pos.y()))
                 self.update()
                 
-        elif "transform" == self.mode:
+        elif Mode.TRANSFORM == self.mode:
 
             self.geometric_center = self.compute_centroid()
                 
@@ -147,14 +157,14 @@ class Canvas(QWidget):
 
     def mouseMoveEvent(self, event):
 
-        if "edit" == self.mode:
+        if Mode.EDIT == self.mode:
             if self.drag_index is not None and (event.buttons() & Qt.LeftButton):
                 pos = event.pos()
                 self.points[self.drag_index].x = pos.x()
                 self.points[self.drag_index].y = pos.y()
                 self.update()
 
-        elif "transform" == self.mode:
+        elif Mode.TRANSFORM == self.mode:
             if (event.buttons() & Qt.LeftButton) and self.drag_start is not None:
                 dx = event.x() - self.drag_start.x()
                 dy = event.y() - self.drag_start.y()
@@ -201,7 +211,7 @@ class Canvas(QWidget):
                 self.update()
 
     def mouseReleaseEvent(self, event):
-        if self.mode == "transform":
+        if self.mode == Mode.TRANSFORM:
             self.drag_start = None
             self.start_angle = None
         if event.button() == Qt.LeftButton and self.drag_index is not None:
@@ -210,35 +220,28 @@ class Canvas(QWidget):
             self.update()
         self.start_angle = None
 
-    def keyPressEvent(self, event):     
-        key = event.key()
+    def keyPressEvent(self, event):
+        func = self.keymap.get(event.key())
+        if func:
+            func()
+            self.update()
+        else:
+            super().keyPressEvent(event)
 
-        match key:
-            case Qt.Key_E:
-                self.mode = "edit"
-                print("Mode:", self.mode)
-                self.update()
-                return
-            case Qt.Key_T:
-                self.mode = "transform"
-                self.T = Transform2D()
-                self.original_points = [Point2D(p.x, p.y) for p in self.points]
+    def set_mode_edit(self):
+        self.mode = Mode.EDIT
+        print("Mode: EDIT")
 
-                self.drag_start = None
-                self.start_angle = None
-                print("Mode:", self.mode)
-                self.update()
-                return
-            
-            case Qt.Key_C:
-                self.mode = "parametric_curve"
-                self.draw_parametric_curve(-5, 5, 100, self.spiral)
-                print("Mode:", self.mode)
-                self.update()
-                return
+    def set_mode_transform(self):
+        self.mode = Mode.TRANSFORM
+        self.T = Transform2D()
+        self.original_points = [Point2D(p.x, p.y) for p in self.points]
+        print("Mode: TRANSFORM")
 
-            case _:
-                super().keyPressEvent(event)
+    def set_mode_parametric(self):
+        self.mode = Mode.PARAMETRIC
+        self.draw_parametric_curve(-5, 5, 100, self.curve.spiral)
+        print("Mode: PARAMETRIC")
 
     def euclidian_distance(self, p1: Point2D, p2: Point2D) -> float:
         dx = p1.x - p2.x
@@ -259,103 +262,10 @@ class Canvas(QWidget):
         self.update()
 
 
-    def draw_parametric_curve(self, a: float, b: float, n: int, *args):
-        self.last_a = a
-        self.last_b = b
-        self.last_n = n
-        self.last_funcs = args
-        #S
-        list_points = self.compute_parametric_points(a, b, n, *args)
-        self.curve_points = self.apply_transformations(list_points)
-        
-
-    def apply_transformations(self, points: list[Point2D]):
-        points = self.step1_translate(points)
-        points = self.step2_scale(points)
-        points = self.step3_center(points)
-        points = self.step4_flip(points)
-        return points
-
-    def compute_parametric_points(self, a, b, n, *args):
-        points = []
-        for i in range(n+1):
-            u = a + i * (b - a) / n
-            if len(args) == 1:
-                pred_func = args[0]
-                f_u, g_u = pred_func(u)
-                points.append(Point2D(f_u, g_u))
-            elif len(args) == 2:
-                f,g = args[0], args[1]
-                points.append(Point2D(f(u), g(u)))
-            else:
-                raise ValueError("Must pass either 1 or 2 functions")
-        return points
-
-    def step1_translate(self, points):
-        self.min_x = min(p.x for p in points)
-        self.min_y = min(p.y for p in points)
-
-        translated = [Point2D(p.x - self.min_x, p.y - self.min_y) for p in points]
-        return translated
-    
-    def step2_scale(self, points):
-        max_x = max(p.x for p in points)
-        max_y = max(p.y for p in points)
-
-        if max_x == 0: max_x = 1
-        if max_y == 0: max_y = 1
-
-        Sx = self.L / max_x
-        Sy = self.H / max_y
-        self.scale_factor = min(Sx, Sy)
-
-        scaled = [Point2D(p.x * self.scale_factor,
-                        p.y * self.scale_factor) for p in points]
-        return scaled
-
-    def step3_center(self, points):
-        max_x = max(p.x for p in points)
-        max_y = max(p.y for p in points)
-
-        self.dx_center = (self.L - max_x) / 2
-        self.dy_center = (self.H - max_y) / 2
-
-        centered = [Point2D(p.x + self.dx_center,
-                            p.y + self.dy_center) for p in points]
-        return centered
-
-    def step4_flip(self, points):
-        flipped = [Point2D(p.x, self.H - p.y) for p in points]
-        return flipped
-    
-    def transform_origin(self) -> Point2D:
-        x = -self.min_x
-        y = -self.min_y
-
-        x *= self.scale_factor
-        y *= self.scale_factor
-
-        x += self.dx_center
-        y += self.dy_center
-
-        y = self.H - y
-
-        return Point2D(x, y)
-    
-    def fcallable(self, u):
-        return u
-    
-    def gcallable(self, u):
-        return u**2
-
-    def ellipse(self, u, c=100, d=50):
-        return c * np.cos(u), d * np.sin(u)
-    
-    def spiral(self, u):
-        return u * np.cos(u), u * np.sin(u) 
-    
-    def parabola(self, u): 
-        return u, u-1
+    def draw_parametric_curve(self, a, b, n, *args):
+        self.curve.compute_points(a, b, n, *args)
+        self.curve.transform(self.L, self.H)
+        self.update()
 
     def draw_arrow(self, painter: QPainter, start: Point2D, end: Point2D, size=10):
         painter.drawLine(QPointF(start.x, start.y), QPointF(end.x, end.y))
