@@ -1,10 +1,12 @@
 import sys
 import numpy as np
 
+from modes import Mode
 from Point2D import Point2D
 from transformare2D import Transform2D
 from parametric_curve import ParametricCurve
-from modes import Mode
+from interpolation_curve import InterpolationCurve
+
 
 from PyQt5.QtGui import QPainter, QPixmap, QImage, QPen, QColor, QIcon
 from PyQt5.QtCore import Qt, QPoint, QPointF, QRect, QSize, pyqtSignal
@@ -50,12 +52,19 @@ class Canvas(QWidget):
         self.L = self.width()
         self.H = self.height()
         
+        # interpolation curve
+        self.interpolation = InterpolationCurve()
+        self.interp_method = "lagrange"
 
         # Keyboard functions
         self.keymap = {
-            Qt.Key_E: self.set_mode_edit,
-            Qt.Key_T: self.set_mode_transform,
-            Qt.Key_C: self.set_mode_parametric,
+        Qt.Key_E: self.set_mode_edit,
+        Qt.Key_T: self.set_mode_transform,
+        Qt.Key_C: self.set_mode_parametric,
+        Qt.Key_I: self.set_mode_interpolation,
+
+        Qt.Key_1: self.set_method_lagrange,  
+        Qt.Key_2: self.set_method_newton  
         }
 
         # Qt info
@@ -69,7 +78,7 @@ class Canvas(QWidget):
         pen.setWidth(2)
         painter.setPen(pen)
 
-        if self.mode in (Mode.EDIT, Mode.TRANSFORM):
+        if self.mode in (Mode.EDIT, Mode.TRANSFORM, Mode.INTERPOLATION):
             for p in self.points:
                 painter.setBrush(QColor(255, 255, 255))
                 painter.drawEllipse(QPointF(p.x, p.y), self.point_radius, self.point_radius)
@@ -109,6 +118,15 @@ class Canvas(QWidget):
             D = Point2D(origin.x, self.H)
             self.draw_arrow(painter, D, C)
 
+        elif self.mode == Mode.INTERPOLATION:
+            pts = self.interpolation.points
+            if len(pts) > 1:
+                for i in range(len(pts) - 1):
+                    p1 = pts[i]
+                    p2 = pts[i + 1]
+                    painter.drawLine(QPointF(p1.x, p1.y),
+                                    QPointF(p2.x, p2.y))
+
     def resizeEvent(self, event):
         self.L = self.width()
         self.H = self.height()
@@ -122,7 +140,6 @@ class Canvas(QWidget):
     def mousePressEvent(self, event):
 
         if Mode.EDIT == self.mode: 
-            self.original_points = [Point2D(p.x, p.y) for p in self.points]
 
             if event.button() == Qt.LeftButton:
                 pos = event.pos()
@@ -153,7 +170,27 @@ class Canvas(QWidget):
                 dx = event.x() - self.geometric_center.x
                 dy = event.y() - self.geometric_center.y
                 self.start_angle = np.arctan2(dy, dx)
-            
+        
+        elif Mode.INTERPOLATION == self.mode:
+
+            if event.button() == Qt.LeftButton:
+                p = Point2D(event.x(), event.y())
+
+                if self.interpolation.can_add_point(p):
+                    self.interpolation.add_point(p)
+                    self.points.append(p)
+                else:
+                    print("Invalid point: x must be strictly increasing.")
+
+                self.update()
+
+            elif event.button() == Qt.RightButton:
+                if self.interp_method == "lagrange":
+                    self.interpolation.compute_lagrange()
+                else:
+                    self.interpolation.compute_newton()
+
+                self.update()
 
     def mouseMoveEvent(self, event):
 
@@ -235,6 +272,7 @@ class Canvas(QWidget):
     def set_mode_transform(self):
         self.mode = Mode.TRANSFORM
         self.T = Transform2D()
+        # if self.original_points is None:
         self.original_points = [Point2D(p.x, p.y) for p in self.points]
         print("Mode: TRANSFORM")
 
@@ -242,6 +280,21 @@ class Canvas(QWidget):
         self.mode = Mode.PARAMETRIC
         self.draw_parametric_curve(-5, 5, 100, self.curve.spiral)
         print("Mode: PARAMETRIC")
+
+    def set_mode_interpolation(self):
+        self.mode = Mode.INTERPOLATION
+        self.points.clear()
+        self.interpolation.control_points = []
+        self.interpolation.points = []
+        print("Mode: INTERPOLATION")
+
+    def set_method_lagrange(self):
+        self.interp_method = "lagrange"
+        print("Interpolation method: LAGRANGE")
+
+    def set_method_newton(self):
+        self.interp_method = "newton"
+        print("Interpolation method: NEWTON")
 
     def euclidian_distance(self, p1: Point2D, p2: Point2D) -> float:
         dx = p1.x - p2.x
