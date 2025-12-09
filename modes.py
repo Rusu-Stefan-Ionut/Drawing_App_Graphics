@@ -5,3 +5,4 @@ class Mode(Enum):
     TRANSFORM = 2
     PARAMETRIC = 3
     INTERPOLATION = 4
+    COONS = 5
