@@ -6,6 +6,7 @@ from Point2D import Point2D
 from transformare2D import Transform2D
 from parametric_curve import ParametricCurve
 from interpolation_curve import InterpolationCurve
+from hermit_curve import HermiteCurve
 
 
 from PyQt5.QtGui import QPainter, QPixmap, QImage, QPen, QColor, QIcon
@@ -34,9 +35,9 @@ class Canvas(QWidget):
         # Draw poligon
         self.points: list[Point2D] = [] 
         self.drag_index: int | None = None
-        self.drag_threshold: int = 10
+        self.drag_threshold: int = 14
         self.mode: Mode = Mode.EDIT
-        self.point_radius: int = 6
+        self.point_radius: int = 8
 
         # Transformations
         self.T: Transform2D = Transform2D()
@@ -64,8 +65,14 @@ class Canvas(QWidget):
         Qt.Key_I: self.set_mode_interpolation,
 
         Qt.Key_1: self.set_method_lagrange,  
-        Qt.Key_2: self.set_method_newton  
+        Qt.Key_2: self.set_method_newton,
+
+        Qt.Key_H: self.set_mode_coons,
+        Qt.Key_K: self.compute_coons_curve,
         }
+
+        #
+        self.hermite = HermiteCurve()
 
         # Qt info
         self.setMinimumSize(500, 400)
@@ -78,7 +85,7 @@ class Canvas(QWidget):
         pen.setWidth(2)
         painter.setPen(pen)
 
-        if self.mode in (Mode.EDIT, Mode.TRANSFORM, Mode.INTERPOLATION):
+        if self.mode in (Mode.EDIT, Mode.TRANSFORM, Mode.INTERPOLATION, Mode.COONS):
             for p in self.points:
                 painter.setBrush(QColor(255, 255, 255))
                 painter.drawEllipse(QPointF(p.x, p.y), self.point_radius, self.point_radius)
@@ -89,6 +96,7 @@ class Canvas(QWidget):
                     QPointF(self.points[i].x, self.points[i].y),
                     QPointF(self.points[i+1].x, self.points[i+1].y)
                 )
+                
             painter.drawLine(
                 QPointF(self.points[-1].x, self.points[-1].y),
                 QPointF(self.points[0].x, self.points[0].y)
@@ -126,6 +134,13 @@ class Canvas(QWidget):
                     p2 = pts[i + 1]
                     painter.drawLine(QPointF(p1.x, p1.y),
                                     QPointF(p2.x, p2.y))
+                    
+        elif self.mode == Mode.COONS:
+            if self.hermite:
+                for i in range(len(self.hermite.points) - 1):
+                    p1 = self.hermite.points[i]
+                    p2 = self.hermite.points[i+1]
+                    painter.drawLine(QPointF(p1.x, p1.y), QPointF(p2.x, p2.y))
 
     def resizeEvent(self, event):
         self.L = self.width()
@@ -139,7 +154,7 @@ class Canvas(QWidget):
 
     def mousePressEvent(self, event):
 
-        if Mode.EDIT == self.mode: 
+        if self.mode in (Mode.EDIT, Mode.COONS): 
 
             if event.button() == Qt.LeftButton:
                 pos = event.pos()
@@ -194,12 +209,17 @@ class Canvas(QWidget):
 
     def mouseMoveEvent(self, event):
 
-        if Mode.EDIT == self.mode:
+        if self.mode in (Mode.EDIT, Mode.COONS):
             if self.drag_index is not None and (event.buttons() & Qt.LeftButton):
                 pos = event.pos()
                 self.points[self.drag_index].x = pos.x()
                 self.points[self.drag_index].y = pos.y()
+                
+                if self.mode == Mode.COONS:
+                    self.compute_coons_curve()
+
                 self.update()
+                return
 
         elif Mode.TRANSFORM == self.mode:
             if (event.buttons() & Qt.LeftButton) and self.drag_start is not None:
@@ -251,11 +271,12 @@ class Canvas(QWidget):
         if self.mode == Mode.TRANSFORM:
             self.drag_start = None
             self.start_angle = None
-        if event.button() == Qt.LeftButton and self.drag_index is not None:
-            self.drag_index = None
-            self.setCursor(Qt.ArrowCursor)
-            self.update()
-        self.start_angle = None
+        if self.mode in (Mode.EDIT, Mode.COONS):
+            if event.button() == Qt.LeftButton and self.drag_index is not None:
+                self.drag_index = None
+                self.setCursor(Qt.ArrowCursor)
+            return
+        # self.start_angle = None
 
     def keyPressEvent(self, event):
         func = self.keymap.get(event.key())
@@ -278,7 +299,7 @@ class Canvas(QWidget):
 
     def set_mode_parametric(self):
         self.mode = Mode.PARAMETRIC
-        self.draw_parametric_curve(-5, 5, 100, self.curve.spiral)
+        self.draw_parametric_curve(0, 20, 100, self.curve.spiral)
         print("Mode: PARAMETRIC")
 
     def set_mode_interpolation(self):
@@ -288,6 +309,11 @@ class Canvas(QWidget):
         self.interpolation.points = []
         print("Mode: INTERPOLATION")
 
+    def set_mode_coons(self):
+        self.mode = Mode.COONS
+        self.hermite = HermiteCurve()
+        print("Mode: COONS")
+
     def set_method_lagrange(self):
         self.interp_method = "lagrange"
         print("Interpolation method: LAGRANGE")
@@ -295,6 +321,15 @@ class Canvas(QWidget):
     def set_method_newton(self):
         self.interp_method = "newton"
         print("Interpolation method: NEWTON")
+
+    def compute_coons_curve(self):
+        self.hermite.clear()
+        for p in self.points:
+            self.hermite.add_point(p)
+
+        self.hermite.compute(steps=200)
+        # print("Computed Coons curve with", len(self.hermite.points), "points")
+        self.update()
 
     def euclidian_distance(self, p1: Point2D, p2: Point2D) -> float:
         dx = p1.x - p2.x
@@ -313,7 +348,6 @@ class Canvas(QWidget):
     def apply_transformation(self):
         self.points = [self.T.apply_to_point(p) for p in self.original_points]
         self.update()
-
 
     def draw_parametric_curve(self, a, b, n, *args):
         self.curve.compute_points(a, b, n, *args)
