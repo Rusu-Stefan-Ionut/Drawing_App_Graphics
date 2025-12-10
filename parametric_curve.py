@@ -121,7 +121,7 @@ class ParametricCurve:
         return u**2
 
     def ellipse(self, u, c=100, d=50):
-        return c * np.cos(u), d * np.sin(u)
+        return u * np.sin(u) + 1, u * np.cos(u) - 2
     
     def spiral(self, u):
         return u * np.cos(u), u * np.sin(u) 

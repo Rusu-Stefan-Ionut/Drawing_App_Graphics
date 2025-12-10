@@ -35,7 +35,7 @@ class Canvas(QWidget):
         # Draw poligon
         self.points: list[Point2D] = [] 
         self.drag_index: int | None = None
-        self.drag_threshold: int = 10
+        self.drag_threshold: int = 14
         self.mode: Mode = Mode.EDIT
         self.point_radius: int = 8
 
@@ -96,6 +96,7 @@ class Canvas(QWidget):
                     QPointF(self.points[i].x, self.points[i].y),
                     QPointF(self.points[i+1].x, self.points[i+1].y)
                 )
+                
             painter.drawLine(
                 QPointF(self.points[-1].x, self.points[-1].y),
                 QPointF(self.points[0].x, self.points[0].y)
@@ -298,7 +299,7 @@ class Canvas(QWidget):
 
     def set_mode_parametric(self):
         self.mode = Mode.PARAMETRIC
-        self.draw_parametric_curve(-5, 5, 100, self.curve.spiral)
+        self.draw_parametric_curve(0, 20, 100, self.curve.spiral)
         print("Mode: PARAMETRIC")
 
     def set_mode_interpolation(self):
@@ -322,6 +323,7 @@ class Canvas(QWidget):
         print("Interpolation method: NEWTON")
 
     def compute_coons_curve(self):
+        self.hermite.clear()
         for p in self.points:
             self.hermite.add_point(p)
 
@@ -346,7 +348,6 @@ class Canvas(QWidget):
     def apply_transformation(self):
         self.points = [self.T.apply_to_point(p) for p in self.original_points]
         self.update()
-
 
     def draw_parametric_curve(self, a, b, n, *args):
         self.curve.compute_points(a, b, n, *args)

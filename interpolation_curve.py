@@ -65,7 +65,7 @@ class InterpolationCurve:
 
         coeffs = self.divided_diferences(x, y)
 
-        x_values = np.linspace(x[0], x[-1], m+1)
+        x_values = np.linspace(x[0], x[-1], m)
 
         result = []
         for curve_point_x in x_values:
